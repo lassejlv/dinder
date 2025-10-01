@@ -1,4 +1,4 @@
-module dinder
+module github.com/lassejlv/dinder
 
 go 1.25.1
 
