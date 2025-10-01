@@ -4,6 +4,10 @@
 
 A clean TUI file manager that lets you review files one by one, deciding whether to keep or delete them.
 
+
+https://github.com/user-attachments/assets/04fe4525-6ee8-42a5-ae78-62d53c8be8a9
+
+
 ## Usage
 
 ```bash
