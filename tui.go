@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -48,7 +53,20 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#874BFD")).
 			Padding(1, 2).
-			Width(50)
+			Width(60)
+
+	codeFileStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#04B575")).
+			Padding(1, 2).
+			Width(70)
+
+	codePreviewStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#F39C12")).
+			Padding(1, 2).
+			Width(80).
+			Height(12)
 
 	buttonStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFF7DB")).
@@ -230,6 +248,7 @@ func (m model) View() string {
 		
 		file := m.files[m.currentFile]
 		fileType := "FILE"
+		icon := getFileIcon(file.Path, file.IsDir)
 		if file.IsDir {
 			fileType = "DIR"
 		}
@@ -237,14 +256,28 @@ func (m model) View() string {
 		sizeStr := formatSize(file.Size)
 		dateStr := file.ModTime.Format("2006-01-02 15:04")
 		
-		content := fmt.Sprintf("%s\n%s\n\nSize: %s\nModified: %s", 
-			fileType, file.Path, sizeStr, dateStr)
+		content := fmt.Sprintf("%s %s\n%s\n\nSize: %s\nModified: %s", 
+			icon, fileType, file.Path, sizeStr, dateStr)
+		
+		var fileBox string
+		var codeBox string
 		
 		if file.Preview != "" {
-			content += "\n\nPreview:\n" + file.Preview
+			if isCodeFile(file.Path) {
+				// File info box (no preview mixed in)
+				fileBox = codeFileStyle.Render(content)
+				
+				// Separate code preview box
+				highlightedPreview := applySyntaxHighlighting(file.Preview, file.Path)
+				codeContent := fmt.Sprintf("Code Preview:\n\n%s", highlightedPreview)
+				codeBox = codePreviewStyle.Render(codeContent)
+			} else {
+				content += "\n\nPreview:\n" + file.Preview
+				fileBox = fileStyle.Render(content)
+			}
+		} else {
+			fileBox = fileStyle.Render(content)
 		}
-		
-		fileBox := fileStyle.Render(content)
 		
 		keepBtn := keepButtonStyle.Render("✓ Keep (→/l/y)")
 		deleteBtn := deleteButtonStyle.Render("✗ Delete (←/h/n)")
@@ -253,16 +286,28 @@ func (m model) View() string {
 		buttons := lipgloss.JoinHorizontal(lipgloss.Top, keepBtn, "  ", deleteBtn, "  ", skipBtn)
 		
 		progress := fmt.Sprintf("Progress: %d/%d", m.currentFile+1, len(m.files))
-		
 		controls := "Controls: u=undo last | q=quit"
 		
-		return fmt.Sprintf("\n%s\n\n%s\n\n%s\n\n%s\n%s",
-			titleStyle.Render("File Review"),
-			fileBox,
-			buttons,
-			progress,
-			controls,
-		)
+		// Layout with two boxes for code files
+		if codeBox != "" {
+			topSection := lipgloss.JoinHorizontal(lipgloss.Top, fileBox, "  ", codeBox)
+			return fmt.Sprintf("\n%s\n\n%s\n\n%s\n\n%s\n%s",
+				titleStyle.Render("File Review"),
+				topSection,
+				buttons,
+				progress,
+				controls,
+			)
+		} else {
+			// Single box layout for non-code files
+			return fmt.Sprintf("\n%s\n\n%s\n\n%s\n\n%s\n%s",
+				titleStyle.Render("File Review"),
+				fileBox,
+				buttons,
+				progress,
+				controls,
+			)
+		}
 
 	case ScreenConfirm:
 		if len(m.toDelete) == 0 {
@@ -275,7 +320,8 @@ func (m model) View() string {
 		
 		var deleteList strings.Builder
 		for _, file := range m.toDelete {
-			deleteList.WriteString(fmt.Sprintf("  %s (%s)\n", file.Path, formatSize(file.Size)))
+			icon := getFileIcon(file.Path, file.IsDir)
+			deleteList.WriteString(fmt.Sprintf("  %s %s (%s)\n", icon, file.Path, formatSize(file.Size)))
 		}
 		
 		sizeInfo := fmt.Sprintf("Total size: %s", formatSize(m.totalSize))
@@ -325,4 +371,69 @@ func formatSize(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func applySyntaxHighlighting(code, path string) string {
+	// Get lexer for the file
+	lexer := lexers.Match(path)
+	if lexer == nil {
+		// Try to get lexer by extension
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".go":
+			lexer = lexers.Get("go")
+		case ".js":
+			lexer = lexers.Get("javascript")
+		case ".ts":
+			lexer = lexers.Get("typescript")
+		case ".py":
+			lexer = lexers.Get("python")
+		case ".json":
+			lexer = lexers.Get("json")
+		case ".md":
+			lexer = lexers.Get("markdown")
+		case ".html":
+			lexer = lexers.Get("html")
+		case ".css":
+			lexer = lexers.Get("css")
+		case ".xml":
+			lexer = lexers.Get("xml")
+		case ".yaml", ".yml":
+			lexer = lexers.Get("yaml")
+		case ".sh", ".bash":
+			lexer = lexers.Get("bash")
+		}
+	}
+	
+	// Fallback to plain text if no lexer found
+	if lexer == nil {
+		return code
+	}
+	
+	// Get terminal formatter with 256 colors
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		return code
+	}
+	
+	// Use a dark theme that works well in terminals
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+	
+	// Tokenize the code
+	iterator, err := lexer.Tokenise(nil, code)
+	if err != nil {
+		return code
+	}
+	
+	// Format the tokens
+	var buf bytes.Buffer
+	err = formatter.Format(&buf, style, iterator)
+	if err != nil {
+		return code
+	}
+	
+	return buf.String()
 }
